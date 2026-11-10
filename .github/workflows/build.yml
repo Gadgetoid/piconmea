@@ -25,17 +25,16 @@ jobs:
           path: pico-sdk
           submodules: true
 
-      - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi cmake ninja-build
+      - uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '15.2.Rel1'
 
       - name: Build
         env:
           PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=${{ matrix.board }}
-          ninja -C build
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=${{ matrix.board }}
+          cmake --build build --parallel
           cp build/piconmea.uf2 piconmea-${{ matrix.board }}.uf2
 
       - uses: actions/upload-artifact@v7
