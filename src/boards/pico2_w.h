@@ -9,4 +9,11 @@
 #define WIRED_UART_TX_PIN 4
 #define WIRED_UART_RX_PIN 5
 
+#define DISPLAY_SPI spi1
+#define DISPLAY_SCK_PIN 10
+#define DISPLAY_MOSI_PIN 11
+#define DISPLAY_DC_PIN 12
+#define DISPLAY_CS_PIN 13
+#define DISPLAY_BL_PIN 14
+
 #endif

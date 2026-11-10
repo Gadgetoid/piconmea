@@ -12,6 +12,7 @@ Hook it to a desktop computer and you can even run simulated test GPS tracks.
 - One of:
   - [Raspberry Pi Pico 2 W](https://www.raspberrypi.com/products/raspberry-pi-pico-2/) and a [JST-SH to DuPont socket cable](https://shop.pimoroni.com/products/jst-sh-cable-qwiic-stemma-qt-compatible?variant=40409136332883)
   - [Pimoroni Pico LiPo 2 XL W](https://shop.pimoroni.com/products/pimoroni-pico-lipo-2-xl-w?variant=55447911006587) and a JST-SH cable, for battery power
+- Optional: a [1.54" SPI Colour Square LCD (240x240) Breakout](https://shop.pimoroni.com/products/1-54-spi-colour-square-lcd-240x240-breakout?variant=39351811702867). On the Pico LiPo 2 XL W, connect it with an [8-pin JST-SH cable (SP/CE)](https://shop.pimoroni.com/products/8-pin-jst-sh-cable-sp-ce?variant=41908359757907). On a Pico 2 W, wire it to the display pins below.
 
 ## Pins
 
@@ -21,6 +22,11 @@ Hook it to a desktop computer and you can even run simulated test GPS tracks.
 | GPS SCL (I2C0) | GP1 | GP5 (Qw/ST) |
 | UART1 TX | GP4 | GP8 |
 | UART1 RX | GP5 | GP9 |
+| Display SCK (SPI) | GP10 (SPI1) | GP34 (SP/CE, SPI0) |
+| Display MOSI | GP11 | GP35 |
+| Display DC | GP12 | GP32 |
+| Display CS | GP13 | GP33 |
+| Display backlight | GP14 | GP36 |
 
 ## Outputs
 
@@ -29,6 +35,8 @@ Hook it to a desktop computer and you can even run simulated test GPS tracks.
 - **UART**: 9600 8N1 at 3.3V logic. Use a level shifter (eg: MAX3232) for RS232.
 
 The onboard LED is lit while a Bluetooth client is connected.
+
+With a display fitted, it shows the fix type, UTC time, a sky plot of satellites (by constellation, filled when used in the fix), per-satellite signal strength, DOP, position, altitude and speed. It follows simulated positions while simulating.
 
 ## Simulator
 

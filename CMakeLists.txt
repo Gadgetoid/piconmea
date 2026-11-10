@@ -17,7 +17,11 @@ endif()
 add_executable(piconmea
     src/main.c
     src/control.c
+    src/display.c
+    src/font8x8.c
     src/gps.c
+    src/gpsview.c
+    src/nmea.c
     src/wired.c
 )
 
@@ -35,7 +39,9 @@ endif()
 
 target_link_libraries(piconmea
     pico_stdlib
+    hardware_dma
     hardware_i2c
+    hardware_spi
     hardware_uart
     pico_btstack_classic
     pico_btstack_cyw43

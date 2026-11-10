@@ -10,6 +10,8 @@
 
 #include "control.h"
 #include "gps.h"
+#include "gpsview.h"
+#include "nmea.h"
 #include "wired.h"
 
 #define DEVICE_NAME "PicoGPS 00:00:00:00:00:00"
@@ -20,6 +22,8 @@
 #define GPS_POLL_PERIOD_MS 100
 #define NMEA_BUFFER_SIZE 2048
 #define RFCOMM_SEND_MAX 512
+#define VIEW_REFRESH_MS 1000
+#define SATELLITE_MAX_AGE_MS 5000
 
 #ifdef PICONMEA_HCI_DUMP
 #define log_status(...) printf(__VA_ARGS__)
@@ -36,12 +40,17 @@ static uint16_t rfcomm_max_frame_size;
 static btstack_ring_buffer_t nmea_ring_buffer;
 static uint8_t nmea_storage[NMEA_BUFFER_SIZE];
 static uint8_t send_buffer[RFCOMM_SEND_MAX];
+static bool view_dirty = true;
+static uint32_t view_rendered_ms;
 
 static void set_led(bool on) {
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on);
 }
 
 static void broadcast_sentence(const char *sentence, size_t length) {
+    if (nmea_feed(sentence, length, to_ms_since_boot(get_absolute_time()))) {
+        view_dirty = true;
+    }
     wired_write_uart(sentence, length);
 
     if (!rfcomm_cid) {
@@ -62,10 +71,22 @@ static void handle_gps_sentence(const char *sentence, size_t length) {
     broadcast_sentence(sentence, length);
 }
 
+static void update_view(void) {
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    if (!view_dirty && now - view_rendered_ms < VIEW_REFRESH_MS) {
+        return;
+    }
+    nmea_expire(now, SATELLITE_MAX_AGE_MS);
+    gpsview_render(nmea_state(), control_simulating(), rfcomm_cid != 0);
+    view_dirty = false;
+    view_rendered_ms = now;
+}
+
 static void gps_timer_handler(btstack_timer_source_t *timer) {
     gps_poll();
     wired_poll();
     control_poll();
+    update_view();
     btstack_run_loop_set_timer(timer, GPS_POLL_PERIOD_MS);
     btstack_run_loop_add_timer(timer);
 }
@@ -138,6 +159,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             log_status("RFCOMM open, cid %u, max frame %u\n", rfcomm_cid, rfcomm_max_frame_size);
             set_led(true);
             control_set_bluetooth_connected(true);
+            view_dirty = true;
             break;
 
         case RFCOMM_EVENT_CAN_SEND_NOW:
@@ -149,6 +171,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             rfcomm_cid = 0;
             set_led(false);
             control_set_bluetooth_connected(false);
+            view_dirty = true;
             break;
 
         default:
@@ -193,6 +216,7 @@ int main(void) {
         return -1;
     }
 
+    gpsview_init();
     btstack_ring_buffer_init(&nmea_ring_buffer, nmea_storage, sizeof(nmea_storage));
     gps_init(handle_gps_sentence);
     control_init(broadcast_sentence, gps_write);
