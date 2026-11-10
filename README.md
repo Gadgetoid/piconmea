@@ -85,3 +85,7 @@ Pins and peripherals for each board are in `src/boards/<PICO_BOARD>.h`. To suppo
 `tools/render_mocks.py` regenerates the display screenshots above on a desktop computer, by compiling the display code against staged NMEA (`uv run tools/render_mocks.py`).
 
 Add `-DPICONMEA_HCI_DUMP=ON` to dump Bluetooth HCI traffic and status messages to USB serial instead of NMEA. This build waits for USB serial to be opened before starting.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The 8x8 font in `src/font8x8.c` is from [font8x8](https://github.com/dhepper/font8x8) by Daniel Hepper, public domain.
