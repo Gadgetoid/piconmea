@@ -8,6 +8,7 @@
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 
+#include "battery.h"
 #include "control.h"
 #include "gps.h"
 #include "gpsview.h"
@@ -77,7 +78,8 @@ static void update_view(void) {
         return;
     }
     nmea_expire(now, SATELLITE_MAX_AGE_MS);
-    gpsview_render(nmea_state(), control_simulating(), rfcomm_cid != 0);
+    battery_status_t battery = battery_read();
+    gpsview_render(nmea_state(), &battery, control_simulating(), rfcomm_cid != 0);
     view_dirty = false;
     view_rendered_ms = now;
 }
@@ -216,6 +218,7 @@ int main(void) {
         return -1;
     }
 
+    battery_init();
     gpsview_init();
     btstack_ring_buffer_init(&nmea_ring_buffer, nmea_storage, sizeof(nmea_storage));
     gps_init(handle_gps_sentence);

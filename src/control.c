@@ -3,6 +3,7 @@
 
 #include "pico/stdio_usb.h"
 
+#include "battery.h"
 #include "control.h"
 #include "wired.h"
 
@@ -17,10 +18,8 @@ static bool line_overflow;
 static bool simulating;
 static bool bluetooth_connected;
 
-static void send_status(void) {
-    char body[32];
-    char sentence[48];
-    snprintf(body, sizeof(body), "PPNM,STATUS,%d,%d", simulating, bluetooth_connected);
+static void send_sentence(const char *body) {
+    char sentence[64];
     uint8_t checksum = 0;
     for (const char *character = body; *character; character++) {
         checksum ^= (uint8_t)*character;
@@ -29,7 +28,28 @@ static void send_status(void) {
     wired_write_usb(sentence, (size_t)length);
 }
 
+static void send_status(void) {
+    char body[32];
+    snprintf(body, sizeof(body), "PPNM,STATUS,%d,%d", simulating, bluetooth_connected);
+    send_sentence(body);
+}
+
+static void send_battery(void) {
+    battery_status_t battery = battery_read();
+    char body[48];
+    if (battery.present) {
+        snprintf(body, sizeof(body), "PPNM,BATTERY,%d,%d,%d", (int)(battery.voltage * 1000.0f + 0.5f), battery.percent, battery.usb_power);
+    } else {
+        snprintf(body, sizeof(body), "PPNM,BATTERY,,,");
+    }
+    send_sentence(body);
+}
+
 static void handle_command(const char *command) {
+    if (strcmp(command, "BATTERY") == 0) {
+        send_battery();
+        return;
+    }
     if (strcmp(command, "SIM,1") == 0) {
         simulating = true;
     } else if (strcmp(command, "SIM,0") == 0) {

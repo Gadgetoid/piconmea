@@ -90,6 +90,7 @@
       <span>USB</span><span id="usb-status" class="off">disconnected</span>
       <span>Mode</span><span id="sim-status" class="off">real GPS</span>
       <span>Bluetooth</span><span id="bt-status" class="off">no client</span>
+      <span>Battery</span><span id="battery-status" class="off">-</span>
     </div>
   </section>
 
@@ -149,6 +150,7 @@ const UPDATE_INTERVAL_MS = 1000;
 const LOG_LINES = 200;
 const EARTH_RADIUS = 6371000;
 const STORAGE_KEY = "picogps-path";
+const BATTERY_POLL_MS = 10000;
 
 const map = L.map("map").setView([52.205, 0.119], 13);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -174,6 +176,7 @@ let travelled = 0;
 let lastTick = 0;
 let lastCourse = 0;
 let timer = null;
+let batteryTimer = null;
 
 function toRadians(degrees) { return degrees * Math.PI / 180; }
 function toDegrees(radians) { return radians * 180 / Math.PI; }
@@ -277,6 +280,12 @@ function handleLine(line) {
     if (!simulating) stopPlayback();
     return;
   }
+  const battery = line.match(/^\$PPNM,BATTERY,(\d*),(\d*),(\d*)\*/);
+  if (battery) {
+    elements["battery-status"].textContent = battery[1] ? `${battery[2]}% (${(Number(battery[1]) / 1000).toFixed(2)} V)${battery[3] === "1" ? ", USB power" : ""}` : "not supported";
+    elements["battery-status"].className = battery[1] ? "on" : "off";
+    return;
+  }
   const rmc = line.match(/^\$G.RMC,[^,]*,A,(\d{2})(\d{2}\.\d+),([NS]),(\d{3})(\d{2}\.\d+),([EW])/);
   if (rmc && !simulating) {
     const latitude = (Number(rmc[1]) + Number(rmc[2]) / 60) * (rmc[3] === "S" ? -1 : 1);
@@ -322,12 +331,15 @@ async function connect() {
   updatePlayButtons();
   readLoop();
   await send(sentence("PPNM,STATUS"));
+  await send(sentence("PPNM,BATTERY"), true);
+  batteryTimer = setInterval(() => send(sentence("PPNM,BATTERY"), true), BATTERY_POLL_MS);
 }
 
 async function disconnect() {
   if (!port) return;
   const closing = port;
   port = null;
+  clearInterval(batteryTimer);
   stopPlayback();
   try {
     await send(sentence("PPNM,SIM,0"));
@@ -342,6 +354,8 @@ async function disconnect() {
   setStatus(elements["usb-status"], false, "connected", "disconnected");
   setStatus(elements["sim-status"], false, "simulating", "real GPS");
   setStatus(elements["bt-status"], false, "client connected", "no client");
+  elements["battery-status"].textContent = "-";
+  elements["battery-status"].className = "off";
   elements.connect.textContent = "Connect";
   elements.simulate.disabled = true;
   elements.simulate.classList.remove("active");

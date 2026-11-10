@@ -16,6 +16,7 @@ endif()
 
 add_executable(piconmea
     src/main.c
+    src/battery.c
     src/control.c
     src/display.c
     src/font8x8.c
@@ -39,6 +40,7 @@ endif()
 
 target_link_libraries(piconmea
     pico_stdlib
+    hardware_adc
     hardware_dma
     hardware_i2c
     hardware_spi

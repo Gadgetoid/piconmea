@@ -38,6 +38,8 @@ The onboard LED is lit while a Bluetooth client is connected.
 
 With a display fitted, it shows the fix type, UTC time, a sky plot of satellites (by constellation, filled when used in the fix), per-satellite signal strength, DOP, position, altitude and speed. It follows simulated positions while simulating.
 
+The Pico LiPo 2 XL W also reports battery voltage and an estimated charge level (from a typical LiPo discharge curve), on the display and over USB. The estimate reads high while charging.
+
 ## Simulator
 
 `web/simulator.html` drives the device from a browser over WebSerial (Chrome or Edge), replacing the GPS with simulated positions on the Bluetooth and UART outputs. Click the map to set a fixed position, or draw a path (or import a GPX track) and play it back at a chosen speed.
@@ -57,6 +59,7 @@ Simulation is controlled with `$PPNM` sentences over USB serial:
 | `$PPNM,SIM,1` | Stop real GPS output and relay NMEA lines received over USB to Bluetooth and UART |
 | `$PPNM,SIM,0` | Return to real GPS |
 | `$PPNM,STATUS` | Report `$PPNM,STATUS,<simulating>,<bluetooth client>` |
+| `$PPNM,BATTERY` | Report `$PPNM,BATTERY,<millivolts>,<percent>,<usb power>` (empty fields on boards without battery sensing) |
 
 Status is also sent when a Bluetooth client connects or disconnects. Simulation ends when the USB serial port is closed.
 

@@ -17,6 +17,11 @@
 #define NO_FIX RGB565(230, 60, 50)
 #define SIMULATING RGB565(230, 200, 40)
 #define BLUETOOTH RGB565(70, 140, 255)
+#define BATTERY_GOOD RGB565(60, 200, 90)
+#define BATTERY_LOW RGB565(230, 200, 40)
+#define BATTERY_CRITICAL RGB565(230, 60, 50)
+#define BATTERY_LOW_PERCENT 50
+#define BATTERY_CRITICAL_PERCENT 20
 
 #define HEADER_HEIGHT 22
 #define SKY_CENTRE_X 68
@@ -234,6 +239,21 @@ static void draw_summary(const nmea_state_t *state) {
     draw_text(COLUMN_X, 136, line, DIM, 1);
 }
 
+static void draw_battery(const battery_status_t *battery) {
+    if (!battery->present) {
+        return;
+    }
+    char line[24];
+    if (battery->usb_power) {
+        snprintf(line, sizeof(line), "USB %.2fV", (double)battery->voltage);
+        draw_text(COLUMN_X, 148, line, BLUETOOTH, 1);
+        return;
+    }
+    uint16_t colour = battery->percent < BATTERY_CRITICAL_PERCENT ? BATTERY_CRITICAL : battery->percent < BATTERY_LOW_PERCENT ? BATTERY_LOW : BATTERY_GOOD;
+    snprintf(line, sizeof(line), "BAT %d%% %.1fV", battery->percent, (double)battery->voltage);
+    draw_text(COLUMN_X, 148, line, colour, 1);
+}
+
 static int compare_satellites(const void *a, const void *b) {
     const nmea_satellite_t *left = a;
     const nmea_satellite_t *right = b;
@@ -294,7 +314,7 @@ bool gpsview_init(void) {
     return available;
 }
 
-void gpsview_render(const nmea_state_t *state, bool simulating, bool bluetooth_connected) {
+void gpsview_render(const nmea_state_t *state, const battery_status_t *battery, bool simulating, bool bluetooth_connected) {
     if (!available) {
         return;
     }
@@ -303,6 +323,7 @@ void gpsview_render(const nmea_state_t *state, bool simulating, bool bluetooth_c
     draw_header(state, simulating, bluetooth_connected);
     draw_sky(state);
     draw_summary(state);
+    draw_battery(battery);
     draw_signal_bars(state);
     draw_position(state);
     display_flush();

@@ -3,9 +3,10 @@
 
 #include <stdbool.h>
 
+#include "battery.h"
 #include "nmea.h"
 
 bool gpsview_init(void);
-void gpsview_render(const nmea_state_t *state, bool simulating, bool bluetooth_connected);
+void gpsview_render(const nmea_state_t *state, const battery_status_t *battery, bool simulating, bool bluetooth_connected);
 
 #endif
