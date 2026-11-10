@@ -33,7 +33,7 @@ typedef struct {
     double latitude;
     double longitude;
     float altitude;
-    float speed_kmh;
+    float speed_knots;
     float course;
     float pdop;
     float hdop;

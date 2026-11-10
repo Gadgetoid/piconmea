@@ -37,6 +37,14 @@
 #define SNR_FULL_SCALE 50
 #define LINE_HEIGHT 12
 
+#ifdef PICONMEA_SPEED_KMH
+#define SPEED_PER_KNOT 1.852f
+#define SPEED_UNIT "km/h"
+#else
+#define SPEED_PER_KNOT 1.150779f
+#define SPEED_UNIT "mph"
+#endif
+
 static const uint16_t constellation_colours[CONSTELLATION_COUNT] = {
     RGB565(60, 200, 90),
     RGB565(240, 140, 40),
@@ -302,7 +310,7 @@ static void draw_position(const nmea_state_t *state) {
     if (state->position_valid || state->fix_quality) {
         snprintf(line, sizeof(line), "%.5f%c %.5f%c", fabs(state->latitude), state->latitude < 0 ? 'S' : 'N', fabs(state->longitude), state->longitude < 0 ? 'W' : 'E');
         draw_text_centred(210, line, TEXT, 1);
-        snprintf(line, sizeof(line), "ALT %.0fm  SPD %.1fkm/h", (double)state->altitude, (double)state->speed_kmh);
+        snprintf(line, sizeof(line), "ALT %.0fm  SPD %.1f" SPEED_UNIT, (double)state->altitude, (double)(state->speed_knots * SPEED_PER_KNOT));
         draw_text_centred(224, line, DIM, 1);
     } else {
         draw_text_centred(216, "Waiting for fix", DIM, 1);

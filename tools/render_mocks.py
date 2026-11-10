@@ -30,7 +30,7 @@ SCENARIOS = {
         "latitude": 51.17886,
         "longitude": -1.82621,
         "altitude": 102.0,
-        "speed_kmh": 3.2,
+        "speed_mph": 2.0,
         "course": 52.0,
         "fix": True,
         "dop": (1.4, 0.8, 1.1),
@@ -96,7 +96,7 @@ def scenario_nmea(scenario):
     if scenario["fix"]:
         latitude = coordinate(scenario["latitude"], 2, "N", "S")
         longitude = coordinate(scenario["longitude"], 3, "E", "W")
-        knots = scenario["speed_kmh"] / 1.852
+        knots = scenario["speed_mph"] * 0.868976
         lines.append(sentence(f"GNGGA,{scenario['time']},{latitude},{longitude},1,{used:02d},{hdop:.1f},{scenario['altitude']:.1f},M,47.0,M,,"))
         lines.append(sentence(f"GNRMC,{scenario['time']},A,{latitude},{longitude},{knots:.2f},{scenario['course']:.2f},{scenario['date']},,,A"))
     else:

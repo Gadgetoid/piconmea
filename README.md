@@ -47,7 +47,7 @@ The Pico LiPo 2 XL W also reports battery voltage and an estimated charge level 
 
 ## Simulator
 
-`web/simulator.html` drives the device from a browser over WebSerial (Chrome or Edge), replacing the GPS with simulated positions on the Bluetooth and UART outputs. Click the map to set a fixed position, or draw a path and play it back at a chosen speed. Imported GPX or OziExplorer `.plt` tracks are shown coloured by speed, with distance, moving time, average and maximum speed, and can be played back too.
+`web/simulator.html` drives the device from a browser over WebSerial (Chrome or Edge), replacing the GPS with simulated positions on the Bluetooth and UART outputs. Click the map to set a fixed position, or draw a path and play it back at a chosen speed. Imported GPX or OziExplorer `.plt` tracks are shown coloured by speed, with distance, moving time, average and maximum speed, and can be played back too. Speeds are in mph by default, with a toggle for km/h.
 
 Serve it from localhost, as the map tiles need a referrer:
 
@@ -79,6 +79,8 @@ ninja -C build
 ```
 
 Use `-DPICO_BOARD=pimoroni_pico_lipo2xl_w` for the Pico LiPo 2 XL W.
+
+The display shows speed in mph. Add `-DPICONMEA_SPEED_UNITS=kmh` for km/h.
 
 Pins and peripherals for each board are in `src/boards/<PICO_BOARD>.h`. To support another board, add a header there.
 

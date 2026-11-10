@@ -5,7 +5,6 @@
 
 #define MAX_FIELDS 24
 #define SENTENCE_MAX 128
-#define KNOTS_TO_KMH 1.852f
 #define GLONASS_FIRST_PRN 65
 #define GLONASS_LAST_PRN 96
 
@@ -138,7 +137,7 @@ static void parse_rmc(char **fields, size_t count) {
     if (state.position_valid) {
         state.latitude = parse_coordinate(fields[3], fields[4]);
         state.longitude = parse_coordinate(fields[5], fields[6]);
-        state.speed_kmh = (float)atof(fields[7]) * KNOTS_TO_KMH;
+        state.speed_knots = (float)atof(fields[7]);
         state.course = (float)atof(fields[8]);
     }
 }

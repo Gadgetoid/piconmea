@@ -33,6 +33,14 @@ target_compile_definitions(piconmea PRIVATE
     PICONMEA_BOARD_HEADER="boards/${PICO_BOARD}.h"
 )
 
+set(PICONMEA_SPEED_UNITS mph CACHE STRING "Speed units on the display: mph or kmh")
+set_property(CACHE PICONMEA_SPEED_UNITS PROPERTY STRINGS mph kmh)
+if(PICONMEA_SPEED_UNITS STREQUAL "kmh")
+    target_compile_definitions(piconmea PRIVATE PICONMEA_SPEED_KMH=1)
+elseif(NOT PICONMEA_SPEED_UNITS STREQUAL "mph")
+    message(FATAL_ERROR "PICONMEA_SPEED_UNITS must be mph or kmh, not '${PICONMEA_SPEED_UNITS}'")
+endif()
+
 option(PICONMEA_HCI_DUMP "Dump HCI packets to USB stdio" OFF)
 if(PICONMEA_HCI_DUMP)
     target_compile_definitions(piconmea PRIVATE PICONMEA_HCI_DUMP=1)

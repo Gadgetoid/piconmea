@@ -126,13 +126,17 @@
   <section>
     <h2>Playback</h2>
     <div class="row">
-      <label>Speed <input id="speed" type="number" min="0.5" step="0.5" value="5"> km/h</label>
+      <button id="units-mph">mph</button>
+      <button id="units-kmh">km/h</button>
     </div>
     <div class="row">
-      <button data-speed="5">Walk</button>
-      <button data-speed="15">Cycle</button>
-      <button data-speed="50">Drive</button>
-      <button data-speed="110">Motorway</button>
+      <label>Speed <input id="speed" type="number" min="0.5" step="0.5" value="3"> <span id="speed-unit">mph</span></label>
+    </div>
+    <div class="row">
+      <button data-preset="0">Walk</button>
+      <button data-preset="1">Cycle</button>
+      <button data-preset="2">Drive</button>
+      <button data-preset="3">Motorway</button>
     </div>
     <div class="row">
       <button id="play" class="primary" disabled>Play</button>
@@ -162,13 +166,20 @@ const STORAGE_KEY = "picogps-path";
 const BATTERY_POLL_MS = 10000;
 const SPEED_WINDOW_S = 5;
 const SEGMENT_GAP_S = 60;
-const MOVING_KMH = 2;
-const JUMP_KMH = 500;
+const MOVING_MPS = 0.45;
+const JUMP_MPS = 134;
+const MPS_TO_KNOTS = 1.943844;
+const MPS_TO_KMH = 3.6;
+const UNITS_KEY = "picogps-units";
+const SPEED_UNITS = {
+  mph: { label: "mph", perMps: 2.236936, presets: [3, 10, 30, 70], bands: [0, 20, 40, 60, 80] },
+  kmh: { label: "km/h", perMps: 3.6, presets: [5, 15, 50, 110], bands: [0, 30, 60, 90, 120] }
+};
+const SPEED_BAND_COLOURS = ["#2563eb", "#16a34a", "#eab308", "#f97316", "#dc2626"];
 const FEET_TO_METRES = 0.3048;
 const OZI_NO_ALTITUDE = -777;
 const DELPHI_EPOCH_MS = Date.UTC(1899, 11, 30);
 const DAY_MS = 86400000;
-const SPEED_COLOURS = [[0, "#2563eb"], [30, "#16a34a"], [60, "#eab308"], [90, "#f97316"], [120, "#dc2626"]];
 
 const map = L.map("map").setView([52.205, 0.119], 13);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -199,6 +210,8 @@ let lastCourse = 0;
 let timer = null;
 let batteryTimer = null;
 let trackPoints = [];
+let units = SPEED_UNITS.mph;
+let lastShown = null;
 
 function toRadians(degrees) { return degrees * Math.PI / 180; }
 function toDegrees(radians) { return radians * 180 / Math.PI; }
@@ -256,20 +269,24 @@ function formatCoordinate(value, degreeDigits, positive, negative) {
   return `${String(degrees).padStart(degreeDigits, "0")}${minutes.toFixed(4).padStart(7, "0")},${hemisphere}`;
 }
 
-function nmeaSentences(position, speedKmh, course) {
+function formatSpeed(metresPerSecond, digits) {
+  return `${(metresPerSecond * units.perMps).toFixed(digits)} ${units.label}`;
+}
+
+function nmeaSentences(position, speedMps, course) {
   const now = new Date();
   const pad = value => String(value).padStart(2, "0");
   const time = `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}.00`;
   const date = `${pad(now.getUTCDate())}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCFullYear() % 100)}`;
   const latitude = formatCoordinate(position.lat, 2, "N", "S");
   const longitude = formatCoordinate(position.lng, 3, "E", "W");
-  const knots = (speedKmh / 1.852).toFixed(2);
+  const knots = (speedMps * MPS_TO_KNOTS).toFixed(2);
   const heading = course.toFixed(2);
   return [
     sentence(`GPGGA,${time},${latitude},${longitude},1,08,1.0,10.0,M,47.0,M,,`),
     sentence("GPGSA,A,3,02,05,08,10,13,15,18,23,,,,,1.8,1.0,1.5"),
     sentence(`GPRMC,${time},A,${latitude},${longitude},${knots},${heading},${date},,,A`),
-    sentence(`GPVTG,${heading},T,,M,${knots},N,${speedKmh.toFixed(2)},K,A`)
+    sentence(`GPVTG,${heading},T,,M,${knots},N,${(speedMps * MPS_TO_KMH).toFixed(2)},K,A`)
   ].join("");
 }
 
@@ -393,8 +410,8 @@ async function setSimulating(on) {
   await send(sentence(`PPNM,SIM,${on ? 1 : 0}`));
 }
 
-function currentSpeed() {
-  return Math.max(0.5, Number(elements.speed.value) || 5);
+function currentSpeedMps() {
+  return Math.max(0.5, Number(elements.speed.value) || units.presets[0]) / units.perMps;
 }
 
 function updatePathInfo() {
@@ -411,9 +428,10 @@ function updatePlayButtons() {
   elements.stop.disabled = !playing && travelled === 0;
 }
 
-function showPosition(position, speedKmh, course) {
+function showPosition(position, speedMps, course) {
+  lastShown = { position, speedMps, course };
   simMarker.setLatLng(position).addTo(map);
-  elements.position.textContent = `${position.lat.toFixed(6)}, ${position.lng.toFixed(6)}\n${speedKmh.toFixed(1)} km/h, ${course.toFixed(0)}°`;
+  elements.position.textContent = `${position.lat.toFixed(6)}, ${position.lng.toFixed(6)}\n${formatSpeed(speedMps, 1)}, ${course.toFixed(0)}°`;
 }
 
 async function tick() {
@@ -422,12 +440,12 @@ async function tick() {
   lastTick = now;
 
   let position = fixedPosition;
-  let speedKmh = 0;
+  let speedMps = 0;
   let course = lastCourse;
 
   if (playing) {
     const total = pathLength();
-    travelled += currentSpeed() / 3.6 * elapsed;
+    travelled += currentSpeedMps() * elapsed;
     if (travelled >= total) {
       if (elements.loop.checked) {
         travelled = travelled % total;
@@ -440,15 +458,15 @@ async function tick() {
     const point = pointAlongPath(travelled);
     position = point.position;
     course = point.course;
-    speedKmh = playing ? currentSpeed() : 0;
+    speedMps = playing ? currentSpeedMps() : 0;
     fixedPosition = position;
     elements.progress.textContent = `${(travelled / 1000).toFixed(2)} of ${(total / 1000).toFixed(2)} km`;
   }
 
   lastCourse = course;
   if (!position) return;
-  showPosition(position, speedKmh, course);
-  if (simulating) await send(nmeaSentences(position, speedKmh, course), true);
+  showPosition(position, speedMps, course);
+  if (simulating) await send(nmeaSentences(position, speedMps, course), true);
 }
 
 function startTimer() {
@@ -535,7 +553,7 @@ function isBreak(points, index) {
   if (current.newSegment || !previous.time || !current.time) return true;
   const seconds = (current.time - previous.time) / 1000;
   if (seconds > SEGMENT_GAP_S) return true;
-  return distance(previous, current) / Math.max(seconds, 1) * 3.6 > JUMP_KMH;
+  return distance(previous, current) / Math.max(seconds, 1) > JUMP_MPS;
 }
 
 function smoothedSpeed(points, index) {
@@ -544,23 +562,25 @@ function smoothedSpeed(points, index) {
     covered += distance(points[end - 1], points[end]);
     const seconds = (points[end].time - points[index].time) / 1000;
     if (seconds >= SPEED_WINDOW_S || end === points.length - 1 || isBreak(points, end + 1)) {
-      return seconds > 0 ? covered / seconds * 3.6 : 0;
+      return seconds > 0 ? covered / seconds : 0;
     }
   }
   return 0;
 }
 
-function speedColour(kmh) {
-  for (let i = 1; i < SPEED_COLOURS.length; i++) {
-    const [upperSpeed, upperColour] = SPEED_COLOURS[i];
-    const [lowerSpeed, lowerColour] = SPEED_COLOURS[i - 1];
-    if (kmh <= upperSpeed) {
-      const fraction = (kmh - lowerSpeed) / (upperSpeed - lowerSpeed);
-      const channel = offset => Math.round(parseInt(lowerColour.slice(offset, offset + 2), 16) * (1 - fraction) + parseInt(upperColour.slice(offset, offset + 2), 16) * fraction);
+function speedColour(metresPerSecond) {
+  const speed = metresPerSecond * units.perMps;
+  const bands = units.bands;
+  for (let i = 1; i < bands.length; i++) {
+    if (speed <= bands[i]) {
+      const fraction = (speed - bands[i - 1]) / (bands[i] - bands[i - 1]);
+      const lower = SPEED_BAND_COLOURS[i - 1];
+      const upper = SPEED_BAND_COLOURS[i];
+      const channel = offset => Math.round(parseInt(lower.slice(offset, offset + 2), 16) * (1 - fraction) + parseInt(upper.slice(offset, offset + 2), 16) * fraction);
       return `rgb(${channel(1)}, ${channel(3)}, ${channel(5)})`;
     }
   }
-  return SPEED_COLOURS[SPEED_COLOURS.length - 1][1];
+  return SPEED_BAND_COLOURS[SPEED_BAND_COLOURS.length - 1];
 }
 
 function formatTime(date) {
@@ -586,7 +606,7 @@ function trackStatistics(points) {
     const seconds = (points[i].time - points[i - 1].time) / 1000;
     recordedDistance += metres;
     recordedSeconds += seconds;
-    if (seconds > 0 && metres / seconds * 3.6 > MOVING_KMH) {
+    if (seconds > 0 && metres / seconds > MOVING_MPS) {
       movingDistance += metres;
       movingSeconds += seconds;
     }
@@ -599,8 +619,8 @@ function trackStatistics(points) {
     distance: recordedDistance,
     recordedSeconds,
     movingSeconds,
-    averageSpeed: recordedSeconds ? recordedDistance / recordedSeconds * 3.6 : 0,
-    movingAverageSpeed: movingSeconds ? movingDistance / movingSeconds * 3.6 : 0,
+    averageSpeed: recordedSeconds ? recordedDistance / recordedSeconds : 0,
+    movingAverageSpeed: movingSeconds ? movingDistance / movingSeconds : 0,
     maximumSpeed,
     lowest: altitudes.length ? Math.min(...altitudes) : null,
     highest: altitudes.length ? Math.max(...altitudes) : null,
@@ -617,9 +637,9 @@ function showTrackStatistics(stats) {
     ["Distance", `${(stats.distance / 1000).toFixed(2)} km`],
     ["Recorded", formatDuration(stats.recordedSeconds)],
     ["Moving", formatDuration(stats.movingSeconds)],
-    ["Average", `${stats.averageSpeed.toFixed(1)} km/h`],
-    ["Moving avg", `${stats.movingAverageSpeed.toFixed(1)} km/h`],
-    ["Max", `${stats.maximumSpeed.toFixed(1)} km/h`],
+    ["Average", formatSpeed(stats.averageSpeed, 1)],
+    ["Moving avg", formatSpeed(stats.movingAverageSpeed, 1)],
+    ["Max", formatSpeed(stats.maximumSpeed, 1)],
     ["Altitude", stats.lowest === null ? "-" : `${stats.lowest.toFixed(0)}-${stats.highest.toFixed(0)} m`]
   ];
   elements["track-stats"].replaceChildren(...rows.flatMap(([label, value]) => {
@@ -629,11 +649,11 @@ function showTrackStatistics(stats) {
     content.textContent = value;
     return [name, content];
   }));
-  elements["track-legend"].replaceChildren(...SPEED_COLOURS.map(([speed, colour]) => {
+  elements["track-legend"].replaceChildren(...units.bands.map((speed, index) => {
     const item = document.createElement("span");
     const swatch = document.createElement("i");
-    swatch.style.background = colour;
-    item.append(swatch, `${speed}${speed === SPEED_COLOURS[SPEED_COLOURS.length - 1][0] ? "+" : ""} km/h`);
+    swatch.style.background = SPEED_BAND_COLOURS[index];
+    item.append(swatch, `${speed}${index === units.bands.length - 1 ? "+" : ""} ${units.label}`);
     return item;
   }));
   elements["track-section"].hidden = false;
@@ -643,10 +663,10 @@ function drawTrack(points) {
   speedLayer.clearLayers();
   for (let i = 1; i < points.length; i++) {
     if (isBreak(points, i)) continue;
-    const kmh = smoothedSpeed(points, i - 1);
+    const speed = smoothedSpeed(points, i - 1);
     const altitude = points[i - 1].altitude === null ? "" : `, ${points[i - 1].altitude.toFixed(0)} m`;
-    L.polyline([points[i - 1], points[i]], { color: speedColour(kmh), weight: 5, opacity: 0.9 })
-      .bindTooltip(`${formatTime(points[i - 1].time)}, ${kmh.toFixed(0)} km/h${altitude}`, { sticky: true })
+    L.polyline([points[i - 1], points[i]], { color: speedColour(speed), weight: 5, opacity: 0.9 })
+      .bindTooltip(`${formatTime(points[i - 1].time)}, ${formatSpeed(speed, 0)}${altitude}`, { sticky: true })
       .addTo(speedLayer);
   }
 }
@@ -656,6 +676,21 @@ function clearTrack() {
   speedLayer.clearLayers();
   pathLine.setStyle(PATH_STYLE);
   elements["track-section"].hidden = true;
+}
+
+function setUnits(key) {
+  const speed = currentSpeedMps();
+  units = SPEED_UNITS[key] || SPEED_UNITS.mph;
+  elements.speed.value = (speed * units.perMps).toFixed(1).replace(/\.0$/, "");
+  elements["speed-unit"].textContent = units.label;
+  elements["units-mph"].classList.toggle("active", units === SPEED_UNITS.mph);
+  elements["units-kmh"].classList.toggle("active", units === SPEED_UNITS.kmh);
+  try { localStorage.setItem(UNITS_KEY, key); } catch (error) {}
+  if (trackPoints.length) {
+    drawTrack(trackPoints);
+    showTrackStatistics(trackStatistics(trackPoints));
+  }
+  if (lastShown) showPosition(lastShown.position, lastShown.speedMps, lastShown.course);
 }
 
 function importTrack(name, text) {
@@ -687,8 +722,16 @@ elements.import.addEventListener("change", async () => {
 });
 elements.play.addEventListener("click", togglePlayback);
 elements.stop.addEventListener("click", stopPlayback);
-document.querySelectorAll("[data-speed]").forEach(button => button.addEventListener("click", () => { elements.speed.value = button.dataset.speed; }));
+document.querySelectorAll("[data-preset]").forEach(button => button.addEventListener("click", () => { elements.speed.value = units.presets[Number(button.dataset.preset)]; }));
+elements["units-mph"].addEventListener("click", () => setUnits("mph"));
+elements["units-kmh"].addEventListener("click", () => setUnits("kmh"));
 navigator.serial?.addEventListener("disconnect", event => { if (event.target === port) disconnect(); });
+
+let savedUnits = "mph";
+try { savedUnits = localStorage.getItem(UNITS_KEY) || "mph"; } catch (error) {}
+elements.speed.value = (SPEED_UNITS[savedUnits] || SPEED_UNITS.mph).presets[0];
+units = SPEED_UNITS[savedUnits] || SPEED_UNITS.mph;
+setUnits(savedUnits);
 
 try {
   const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
