@@ -69,6 +69,9 @@
     white-space: pre;
   }
   #map { height: 100vh; }
+  .legend { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend i { display: inline-block; width: 14px; height: 4px; border-radius: 2px; }
   .hint { color: var(--muted); font-size: 12px; margin: 0; }
   @media (max-width: 700px) {
     body { grid-template-columns: 1fr; grid-template-rows: auto 60vh; height: auto; }
@@ -108,10 +111,16 @@
     <div class="row">
       <button id="undo">Undo point</button>
       <button id="clear">Clear</button>
-      <button id="import-button">Import GPX</button>
-      <input id="import" type="file" accept=".gpx" hidden>
+      <button id="import-button">Import track</button>
+      <input id="import" type="file" accept=".gpx,.plt" hidden>
     </div>
     <p class="hint" id="path-info">No path.</p>
+  </section>
+
+  <section id="track-section" hidden>
+    <h2>Track</h2>
+    <div class="status" id="track-stats"></div>
+    <div class="legend" id="track-legend"></div>
   </section>
 
   <section>
@@ -151,6 +160,15 @@ const LOG_LINES = 200;
 const EARTH_RADIUS = 6371000;
 const STORAGE_KEY = "picogps-path";
 const BATTERY_POLL_MS = 10000;
+const SPEED_WINDOW_S = 5;
+const SEGMENT_GAP_S = 60;
+const MOVING_KMH = 2;
+const JUMP_KMH = 500;
+const FEET_TO_METRES = 0.3048;
+const OZI_NO_ALTITUDE = -777;
+const DELPHI_EPOCH_MS = Date.UTC(1899, 11, 30);
+const DAY_MS = 86400000;
+const SPEED_COLOURS = [[0, "#2563eb"], [30, "#16a34a"], [60, "#eab308"], [90, "#f97316"], [120, "#dc2626"]];
 
 const map = L.map("map").setView([52.205, 0.119], 13);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -158,7 +176,10 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "&copy; OpenStreetMap contributors"
 }).addTo(map);
 
-const pathLine = L.polyline([], { color: "#2563eb", weight: 4 }).addTo(map);
+const PATH_STYLE = { color: "#2563eb", weight: 4, opacity: 1, dashArray: null };
+const TRACK_PATH_STYLE = { color: "#64748b", weight: 2, opacity: 0.6, dashArray: "4 6" };
+const pathLine = L.polyline([], PATH_STYLE).addTo(map);
+const speedLayer = L.layerGroup().addTo(map);
 const simMarker = L.circleMarker([0, 0], { radius: 8, color: "#b91c1c", fillOpacity: 0.9 });
 const realMarker = L.circleMarker([0, 0], { radius: 7, color: "#15803d", fillOpacity: 0.6 }).bindTooltip("Real GPS");
 
@@ -177,6 +198,7 @@ let lastTick = 0;
 let lastCourse = 0;
 let timer = null;
 let batteryTimer = null;
+let trackPoints = [];
 
 function toRadians(degrees) { return degrees * Math.PI / 180; }
 function toDegrees(radians) { return radians * 180 / Math.PI; }
@@ -463,6 +485,7 @@ function setTool(name) {
 
 map.on("click", async event => {
   if (tool === "draw") {
+    if (trackPoints.length) clearTrack();
     path.push(event.latlng);
     updatePathInfo();
     return;
@@ -475,13 +498,178 @@ map.on("click", async event => {
   tick();
 });
 
-function importGpx(text) {
+function parsePlt(text) {
+  return text.split(/\r?\n/).slice(6).map(line => line.split(",").map(field => field.trim())).filter(fields => fields.length >= 2 && Number.isFinite(Number(fields[0])) && Number.isFinite(Number(fields[1]))).map(fields => {
+    const feet = Number(fields[3]);
+    const days = Number(fields[4]);
+    return {
+      lat: Number(fields[0]),
+      lng: Number(fields[1]),
+      newSegment: fields[2] === "1",
+      altitude: Number.isFinite(feet) && feet !== OZI_NO_ALTITUDE ? feet * FEET_TO_METRES : null,
+      time: Number.isFinite(days) && days > 0 ? new Date(DELPHI_EPOCH_MS + days * DAY_MS) : null
+    };
+  });
+}
+
+function parseGpx(text) {
   const documentNode = new DOMParser().parseFromString(text, "application/xml");
   const points = [...documentNode.querySelectorAll("trkpt, rtept")];
   const source = points.length ? points : [...documentNode.querySelectorAll("wpt")];
-  path = source.map(point => L.latLng(Number(point.getAttribute("lat")), Number(point.getAttribute("lon"))));
+  return source.map(point => {
+    const time = point.querySelector("time")?.textContent;
+    const elevation = point.querySelector("ele")?.textContent;
+    return {
+      lat: Number(point.getAttribute("lat")),
+      lng: Number(point.getAttribute("lon")),
+      newSegment: point.parentElement?.tagName === "trkseg" && point.previousElementSibling === null,
+      altitude: elevation ? Number(elevation) : null,
+      time: time ? new Date(time) : null
+    };
+  });
+}
+
+function isBreak(points, index) {
+  const previous = points[index - 1];
+  const current = points[index];
+  if (current.newSegment || !previous.time || !current.time) return true;
+  const seconds = (current.time - previous.time) / 1000;
+  if (seconds > SEGMENT_GAP_S) return true;
+  return distance(previous, current) / Math.max(seconds, 1) * 3.6 > JUMP_KMH;
+}
+
+function smoothedSpeed(points, index) {
+  let covered = 0;
+  for (let end = index + 1; end < points.length && !isBreak(points, end); end++) {
+    covered += distance(points[end - 1], points[end]);
+    const seconds = (points[end].time - points[index].time) / 1000;
+    if (seconds >= SPEED_WINDOW_S || end === points.length - 1 || isBreak(points, end + 1)) {
+      return seconds > 0 ? covered / seconds * 3.6 : 0;
+    }
+  }
+  return 0;
+}
+
+function speedColour(kmh) {
+  for (let i = 1; i < SPEED_COLOURS.length; i++) {
+    const [upperSpeed, upperColour] = SPEED_COLOURS[i];
+    const [lowerSpeed, lowerColour] = SPEED_COLOURS[i - 1];
+    if (kmh <= upperSpeed) {
+      const fraction = (kmh - lowerSpeed) / (upperSpeed - lowerSpeed);
+      const channel = offset => Math.round(parseInt(lowerColour.slice(offset, offset + 2), 16) * (1 - fraction) + parseInt(upperColour.slice(offset, offset + 2), 16) * fraction);
+      return `rgb(${channel(1)}, ${channel(3)}, ${channel(5)})`;
+    }
+  }
+  return SPEED_COLOURS[SPEED_COLOURS.length - 1][1];
+}
+
+function formatTime(date) {
+  return date ? date.toISOString().slice(11, 19) : "-";
+}
+
+function formatDuration(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  const remainder = Math.round(seconds % 60);
+  return hours ? `${hours}h ${String(minutes).padStart(2, "0")}m` : `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+}
+
+function trackStatistics(points) {
+  let recordedDistance = 0;
+  let recordedSeconds = 0;
+  let movingDistance = 0;
+  let movingSeconds = 0;
+  let maximumSpeed = 0;
+  for (let i = 1; i < points.length; i++) {
+    if (isBreak(points, i)) continue;
+    const metres = distance(points[i - 1], points[i]);
+    const seconds = (points[i].time - points[i - 1].time) / 1000;
+    recordedDistance += metres;
+    recordedSeconds += seconds;
+    if (seconds > 0 && metres / seconds * 3.6 > MOVING_KMH) {
+      movingDistance += metres;
+      movingSeconds += seconds;
+    }
+    maximumSpeed = Math.max(maximumSpeed, smoothedSpeed(points, i - 1));
+  }
+  const altitudes = points.map(point => point.altitude).filter(altitude => altitude !== null);
+  const timed = points.filter(point => point.time);
+  return {
+    points: points.length,
+    distance: recordedDistance,
+    recordedSeconds,
+    movingSeconds,
+    averageSpeed: recordedSeconds ? recordedDistance / recordedSeconds * 3.6 : 0,
+    movingAverageSpeed: movingSeconds ? movingDistance / movingSeconds * 3.6 : 0,
+    maximumSpeed,
+    lowest: altitudes.length ? Math.min(...altitudes) : null,
+    highest: altitudes.length ? Math.max(...altitudes) : null,
+    start: timed[0]?.time,
+    end: timed[timed.length - 1]?.time
+  };
+}
+
+function showTrackStatistics(stats) {
+  const rows = [
+    ["Points", stats.points],
+    ["Start", stats.start ? `${stats.start.toISOString().slice(0, 10)} ${formatTime(stats.start)}` : "-"],
+    ["End", stats.end ? `${stats.end.toISOString().slice(0, 10)} ${formatTime(stats.end)}` : "-"],
+    ["Distance", `${(stats.distance / 1000).toFixed(2)} km`],
+    ["Recorded", formatDuration(stats.recordedSeconds)],
+    ["Moving", formatDuration(stats.movingSeconds)],
+    ["Average", `${stats.averageSpeed.toFixed(1)} km/h`],
+    ["Moving avg", `${stats.movingAverageSpeed.toFixed(1)} km/h`],
+    ["Max", `${stats.maximumSpeed.toFixed(1)} km/h`],
+    ["Altitude", stats.lowest === null ? "-" : `${stats.lowest.toFixed(0)}-${stats.highest.toFixed(0)} m`]
+  ];
+  elements["track-stats"].replaceChildren(...rows.flatMap(([label, value]) => {
+    const name = document.createElement("span");
+    const content = document.createElement("span");
+    name.textContent = label;
+    content.textContent = value;
+    return [name, content];
+  }));
+  elements["track-legend"].replaceChildren(...SPEED_COLOURS.map(([speed, colour]) => {
+    const item = document.createElement("span");
+    const swatch = document.createElement("i");
+    swatch.style.background = colour;
+    item.append(swatch, `${speed}${speed === SPEED_COLOURS[SPEED_COLOURS.length - 1][0] ? "+" : ""} km/h`);
+    return item;
+  }));
+  elements["track-section"].hidden = false;
+}
+
+function drawTrack(points) {
+  speedLayer.clearLayers();
+  for (let i = 1; i < points.length; i++) {
+    if (isBreak(points, i)) continue;
+    const kmh = smoothedSpeed(points, i - 1);
+    const altitude = points[i - 1].altitude === null ? "" : `, ${points[i - 1].altitude.toFixed(0)} m`;
+    L.polyline([points[i - 1], points[i]], { color: speedColour(kmh), weight: 5, opacity: 0.9 })
+      .bindTooltip(`${formatTime(points[i - 1].time)}, ${kmh.toFixed(0)} km/h${altitude}`, { sticky: true })
+      .addTo(speedLayer);
+  }
+}
+
+function clearTrack() {
+  trackPoints = [];
+  speedLayer.clearLayers();
+  pathLine.setStyle(PATH_STYLE);
+  elements["track-section"].hidden = true;
+}
+
+function importTrack(name, text) {
+  const points = (name.toLowerCase().endsWith(".plt") ? parsePlt(text) : parseGpx(text)).filter(point => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+  clearTrack();
+  path = points.map(point => L.latLng(point.lat, point.lng));
   stopPlayback();
   updatePathInfo();
+  if (points.some(point => point.time)) {
+    trackPoints = points;
+    pathLine.setStyle(TRACK_PATH_STYLE);
+    drawTrack(points);
+    showTrackStatistics(trackStatistics(points));
+  }
   if (path.length) map.fitBounds(pathLine.getBounds(), { padding: [40, 40] });
 }
 
@@ -489,12 +677,12 @@ elements.connect.addEventListener("click", () => (port ? disconnect() : connect(
 elements.simulate.addEventListener("click", () => setSimulating(!simulating));
 elements["tool-place"].addEventListener("click", () => setTool("place"));
 elements["tool-draw"].addEventListener("click", () => setTool("draw"));
-elements.undo.addEventListener("click", () => { path.pop(); updatePathInfo(); });
-elements.clear.addEventListener("click", () => { path = []; stopPlayback(); updatePathInfo(); });
+elements.undo.addEventListener("click", () => { clearTrack(); path.pop(); updatePathInfo(); });
+elements.clear.addEventListener("click", () => { clearTrack(); path = []; stopPlayback(); updatePathInfo(); });
 elements["import-button"].addEventListener("click", () => elements.import.click());
 elements.import.addEventListener("change", async () => {
   const file = elements.import.files[0];
-  if (file) importGpx(await file.text());
+  if (file) importTrack(file.name, await file.text());
   elements.import.value = "";
 });
 elements.play.addEventListener("click", togglePlayback);

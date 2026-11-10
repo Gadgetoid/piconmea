@@ -47,7 +47,7 @@ The Pico LiPo 2 XL W also reports battery voltage and an estimated charge level 
 
 ## Simulator
 
-`web/simulator.html` drives the device from a browser over WebSerial (Chrome or Edge), replacing the GPS with simulated positions on the Bluetooth and UART outputs. Click the map to set a fixed position, or draw a path (or import a GPX track) and play it back at a chosen speed.
+`web/simulator.html` drives the device from a browser over WebSerial (Chrome or Edge), replacing the GPS with simulated positions on the Bluetooth and UART outputs. Click the map to set a fixed position, or draw a path and play it back at a chosen speed. Imported GPX or OziExplorer `.plt` tracks are shown coloured by speed, with distance, moving time, average and maximum speed, and can be played back too.
 
 Serve it from localhost, as the map tiles need a referrer:
 
