@@ -36,6 +36,11 @@ Hook it to a desktop computer and you can even run simulated test GPS tracks.
 
 The onboard LED is lit while a Bluetooth client is connected.
 
+<p>
+  <img src="docs/display-stonehenge.png" width="320" alt="3D fix at Stonehenge at sunrise on the summer solstice">
+  <img src="docs/display-acquiring.png" width="320" alt="Acquiring satellites with no fix yet">
+</p>
+
 With a display fitted, it shows the fix type, UTC time, a sky plot of satellites (by constellation, filled when used in the fix), per-satellite signal strength, DOP, position, altitude and speed. It follows simulated positions while simulating.
 
 The Pico LiPo 2 XL W also reports battery voltage and an estimated charge level (from a typical LiPo discharge curve), on the display and over USB. The estimate reads high while charging.
@@ -76,5 +81,7 @@ ninja -C build
 Use `-DPICO_BOARD=pimoroni_pico_lipo2xl_w` for the Pico LiPo 2 XL W.
 
 Pins and peripherals for each board are in `src/boards/<PICO_BOARD>.h`. To support another board, add a header there.
+
+`tools/render_mocks.py` regenerates the display screenshots above on a desktop computer, by compiling the display code against staged NMEA (`uv run tools/render_mocks.py`).
 
 Add `-DPICONMEA_HCI_DUMP=ON` to dump Bluetooth HCI traffic and status messages to USB serial instead of NMEA. This build waits for USB serial to be opened before starting.
