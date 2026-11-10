@@ -42,3 +42,24 @@ jobs:
         with:
           name: piconmea-${{ matrix.board }}
           path: piconmea-${{ matrix.board }}.uf2
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: piconmea-*
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for file in piconmea-*.uf2; do
+            mv "$file" "piconmea-${GITHUB_REF_NAME}-${file#piconmea-}"
+          done
+          gh release create "$GITHUB_REF_NAME" piconmea-*.uf2 --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
