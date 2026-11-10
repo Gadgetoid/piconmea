@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PicoGPS Simulator</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --background: #f6f6f4;
+    --panel: #ffffff;
+    --text: #1d1d1b;
+    --muted: #6b6b66;
+    --border: #d9d9d4;
+    --accent: #2563eb;
+    --good: #15803d;
+    --warn: #b45309;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 14px/1.4 system-ui, sans-serif;
+    color: var(--text);
+    background: var(--background);
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    height: 100vh;
+  }
+  aside {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 8px; }
+  section { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--background);
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.active { background: var(--text); border-color: var(--text); color: #fff; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  input[type=number] { width: 80px; font: inherit; padding: 4px 6px; }
+  .status { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+  .status span:nth-child(odd) { color: var(--muted); }
+  .on { color: var(--good); font-weight: 600; }
+  .off { color: var(--muted); }
+  #position { font-family: ui-monospace, monospace; font-size: 12px; }
+  #log {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px;
+    height: 160px;
+    overflow-y: auto;
+    white-space: pre;
+  }
+  #map { height: 100vh; }
+  .hint { color: var(--muted); font-size: 12px; margin: 0; }
+  @media (max-width: 700px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 60vh; height: auto; }
+    #map { height: 60vh; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <h1>PicoGPS Simulator</h1>
+
+  <section>
+    <h2>Device</h2>
+    <div class="row">
+      <button id="connect" class="primary">Connect</button>
+      <button id="simulate" disabled>Simulate</button>
+    </div>
+    <div class="status">
+      <span>USB</span><span id="usb-status" class="off">disconnected</span>
+      <span>Mode</span><span id="sim-status" class="off">real GPS</span>
+      <span>Bluetooth</span><span id="bt-status" class="off">no client</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Map tool</h2>
+    <div class="row">
+      <button id="tool-place" class="active">Place</button>
+      <button id="tool-draw">Draw path</button>
+    </div>
+    <p class="hint" id="tool-hint">Click the map to set a fixed position.</p>
+  </section>
+
+  <section>
+    <h2>Path</h2>
+    <div class="row">
+      <button id="undo">Undo point</button>
+      <button id="clear">Clear</button>
+      <button id="import-button">Import GPX</button>
+      <input id="import" type="file" accept=".gpx" hidden>
+    </div>
+    <p class="hint" id="path-info">No path.</p>
+  </section>
+
+  <section>
+    <h2>Playback</h2>
+    <div class="row">
+      <label>Speed <input id="speed" type="number" min="0.5" step="0.5" value="5"> km/h</label>
+    </div>
+    <div class="row">
+      <button data-speed="5">Walk</button>
+      <button data-speed="15">Cycle</button>
+      <button data-speed="50">Drive</button>
+      <button data-speed="110">Motorway</button>
+    </div>
+    <div class="row">
+      <button id="play" class="primary" disabled>Play</button>
+      <button id="stop" disabled>Stop</button>
+      <label><input id="loop" type="checkbox"> Loop</label>
+    </div>
+    <p class="hint" id="progress"></p>
+  </section>
+
+  <section>
+    <h2>Position</h2>
+    <div id="position">-</div>
+  </section>
+
+  <section>
+    <h2>Serial log</h2>
+    <div id="log"></div>
+  </section>
+</aside>
+<div id="map"></div>
+
+<script>
+const UPDATE_INTERVAL_MS = 1000;
+const LOG_LINES = 200;
+const EARTH_RADIUS = 6371000;
+const STORAGE_KEY = "picogps-path";
+
+const map = L.map("map").setView([52.205, 0.119], 13);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: "&copy; OpenStreetMap contributors"
+}).addTo(map);
+
+const pathLine = L.polyline([], { color: "#2563eb", weight: 4 }).addTo(map);
+const simMarker = L.circleMarker([0, 0], { radius: 8, color: "#b91c1c", fillOpacity: 0.9 });
+const realMarker = L.circleMarker([0, 0], { radius: 7, color: "#15803d", fillOpacity: 0.6 }).bindTooltip("Real GPS");
+
+const elements = Object.fromEntries([...document.querySelectorAll("[id]")].map(element => [element.id, element]));
+
+let port = null;
+let writer = null;
+let reader = null;
+let simulating = false;
+let tool = "place";
+let path = [];
+let fixedPosition = null;
+let playing = false;
+let travelled = 0;
+let lastTick = 0;
+let lastCourse = 0;
+let timer = null;
+
+function toRadians(degrees) { return degrees * Math.PI / 180; }
+function toDegrees(radians) { return radians * 180 / Math.PI; }
+
+function distance(a, b) {
+  const deltaLatitude = toRadians(b.lat - a.lat);
+  const deltaLongitude = toRadians(b.lng - a.lng);
+  const h = Math.sin(deltaLatitude / 2) ** 2 + Math.cos(toRadians(a.lat)) * Math.cos(toRadians(b.lat)) * Math.sin(deltaLongitude / 2) ** 2;
+  return 2 * EARTH_RADIUS * Math.asin(Math.sqrt(h));
+}
+
+function bearing(a, b) {
+  const y = Math.sin(toRadians(b.lng - a.lng)) * Math.cos(toRadians(b.lat));
+  const x = Math.cos(toRadians(a.lat)) * Math.sin(toRadians(b.lat)) - Math.sin(toRadians(a.lat)) * Math.cos(toRadians(b.lat)) * Math.cos(toRadians(b.lng - a.lng));
+  return (toDegrees(Math.atan2(y, x)) + 360) % 360;
+}
+
+function pathLength() {
+  let total = 0;
+  for (let i = 1; i < path.length; i++) total += distance(path[i - 1], path[i]);
+  return total;
+}
+
+function pointAlongPath(target) {
+  let covered = 0;
+  for (let i = 1; i < path.length; i++) {
+    const segment = distance(path[i - 1], path[i]);
+    if (covered + segment >= target && segment > 0) {
+      const fraction = (target - covered) / segment;
+      return {
+        position: L.latLng(path[i - 1].lat + (path[i].lat - path[i - 1].lat) * fraction, path[i - 1].lng + (path[i].lng - path[i - 1].lng) * fraction),
+        course: bearing(path[i - 1], path[i])
+      };
+    }
+    covered += segment;
+  }
+  return { position: path[path.length - 1], course: lastCourse };
+}
+
+function checksum(body) {
+  let value = 0;
+  for (const character of body) value ^= character.charCodeAt(0);
+  return value.toString(16).toUpperCase().padStart(2, "0");
+}
+
+function sentence(body) {
+  return `$${body}*${checksum(body)}\r\n`;
+}
+
+function formatCoordinate(value, degreeDigits, positive, negative) {
+  const hemisphere = value >= 0 ? positive : negative;
+  const absolute = Math.abs(value);
+  const degrees = Math.floor(absolute);
+  const minutes = (absolute - degrees) * 60;
+  return `${String(degrees).padStart(degreeDigits, "0")}${minutes.toFixed(4).padStart(7, "0")},${hemisphere}`;
+}
+
+function nmeaSentences(position, speedKmh, course) {
+  const now = new Date();
+  const pad = value => String(value).padStart(2, "0");
+  const time = `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}.00`;
+  const date = `${pad(now.getUTCDate())}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCFullYear() % 100)}`;
+  const latitude = formatCoordinate(position.lat, 2, "N", "S");
+  const longitude = formatCoordinate(position.lng, 3, "E", "W");
+  const knots = (speedKmh / 1.852).toFixed(2);
+  const heading = course.toFixed(2);
+  return [
+    sentence(`GPGGA,${time},${latitude},${longitude},1,08,1.0,10.0,M,47.0,M,,`),
+    sentence("GPGSA,A,3,02,05,08,10,13,15,18,23,,,,,1.8,1.0,1.5"),
+    sentence(`GPRMC,${time},A,${latitude},${longitude},${knots},${heading},${date},,,A`),
+    sentence(`GPVTG,${heading},T,,M,${knots},N,${speedKmh.toFixed(2)},K,A`)
+  ].join("");
+}
+
+function log(text, direction) {
+  const lines = elements.log.textContent.split("\n").filter(Boolean);
+  for (const line of text.split(/\r?\n/).filter(Boolean)) lines.push(`${direction} ${line}`);
+  elements.log.textContent = lines.slice(-LOG_LINES).join("\n") + "\n";
+  elements.log.scrollTop = elements.log.scrollHeight;
+}
+
+async function send(text, quiet) {
+  if (!writer) return;
+  await writer.write(text);
+  if (!quiet) log(text, ">");
+}
+
+function setStatus(element, on, onText, offText) {
+  element.textContent = on ? onText : offText;
+  element.className = on ? "on" : "off";
+}
+
+function handleLine(line) {
+  const status = line.match(/^\$PPNM,STATUS,(\d),(\d)\*/);
+  if (status) {
+    simulating = status[1] === "1";
+    setStatus(elements["sim-status"], simulating, "simulating", "real GPS");
+    setStatus(elements["bt-status"], status[2] === "1", "client connected", "no client");
+    elements.simulate.classList.toggle("active", simulating);
+    log(line, "<");
+    if (!simulating) stopPlayback();
+    return;
+  }
+  const rmc = line.match(/^\$G.RMC,[^,]*,A,(\d{2})(\d{2}\.\d+),([NS]),(\d{3})(\d{2}\.\d+),([EW])/);
+  if (rmc && !simulating) {
+    const latitude = (Number(rmc[1]) + Number(rmc[2]) / 60) * (rmc[3] === "S" ? -1 : 1);
+    const longitude = (Number(rmc[4]) + Number(rmc[5]) / 60) * (rmc[6] === "W" ? -1 : 1);
+    realMarker.setLatLng([latitude, longitude]).addTo(map);
+  }
+}
+
+async function readLoop() {
+  const decoder = new TextDecoderStream();
+  port.readable.pipeTo(decoder.writable).catch(() => {});
+  reader = decoder.readable.getReader();
+  let buffer = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      lines.map(line => line.trim()).filter(Boolean).forEach(handleLine);
+    }
+  } catch (error) {
+    log(String(error), "!");
+  }
+  await disconnect();
+}
+
+async function connect() {
+  if (!("serial" in navigator)) {
+    alertInLog("WebSerial is not supported in this browser. Use Chrome or Edge.");
+    return;
+  }
+  port = await navigator.serial.requestPort();
+  await port.open({ baudRate: 115200 });
+  await port.setSignals({ dataTerminalReady: true });
+  const encoder = new TextEncoderStream();
+  encoder.readable.pipeTo(port.writable).catch(() => {});
+  writer = encoder.writable.getWriter();
+  setStatus(elements["usb-status"], true, "connected", "disconnected");
+  elements.connect.textContent = "Disconnect";
+  elements.simulate.disabled = false;
+  updatePlayButtons();
+  readLoop();
+  await send(sentence("PPNM,STATUS"));
+}
+
+async function disconnect() {
+  if (!port) return;
+  const closing = port;
+  port = null;
+  stopPlayback();
+  try {
+    await send(sentence("PPNM,SIM,0"));
+    writer.releaseLock();
+    await reader.cancel();
+    await closing.close();
+  } catch (error) {
+  }
+  writer = null;
+  reader = null;
+  simulating = false;
+  setStatus(elements["usb-status"], false, "connected", "disconnected");
+  setStatus(elements["sim-status"], false, "simulating", "real GPS");
+  setStatus(elements["bt-status"], false, "client connected", "no client");
+  elements.connect.textContent = "Connect";
+  elements.simulate.disabled = true;
+  elements.simulate.classList.remove("active");
+  updatePlayButtons();
+}
+
+function alertInLog(message) {
+  log(message, "!");
+}
+
+async function setSimulating(on) {
+  if (on === simulating) return;
+  await send(sentence(`PPNM,SIM,${on ? 1 : 0}`));
+}
+
+function currentSpeed() {
+  return Math.max(0.5, Number(elements.speed.value) || 5);
+}
+
+function updatePathInfo() {
+  pathLine.setLatLngs(path);
+  const length = pathLength();
+  elements["path-info"].textContent = path.length ? `${path.length} points, ${(length / 1000).toFixed(2)} km` : "No path.";
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(path.map(point => [point.lat, point.lng]))); } catch (error) {}
+  updatePlayButtons();
+}
+
+function updatePlayButtons() {
+  elements.play.disabled = !writer || path.length < 2;
+  elements.play.textContent = playing ? "Pause" : "Play";
+  elements.stop.disabled = !playing && travelled === 0;
+}
+
+function showPosition(position, speedKmh, course) {
+  simMarker.setLatLng(position).addTo(map);
+  elements.position.textContent = `${position.lat.toFixed(6)}, ${position.lng.toFixed(6)}\n${speedKmh.toFixed(1)} km/h, ${course.toFixed(0)}°`;
+}
+
+async function tick() {
+  const now = performance.now();
+  const elapsed = (now - lastTick) / 1000;
+  lastTick = now;
+
+  let position = fixedPosition;
+  let speedKmh = 0;
+  let course = lastCourse;
+
+  if (playing) {
+    const total = pathLength();
+    travelled += currentSpeed() / 3.6 * elapsed;
+    if (travelled >= total) {
+      if (elements.loop.checked) {
+        travelled = travelled % total;
+      } else {
+        travelled = total;
+        playing = false;
+        updatePlayButtons();
+      }
+    }
+    const point = pointAlongPath(travelled);
+    position = point.position;
+    course = point.course;
+    speedKmh = playing ? currentSpeed() : 0;
+    fixedPosition = position;
+    elements.progress.textContent = `${(travelled / 1000).toFixed(2)} of ${(total / 1000).toFixed(2)} km`;
+  }
+
+  lastCourse = course;
+  if (!position) return;
+  showPosition(position, speedKmh, course);
+  if (simulating) await send(nmeaSentences(position, speedKmh, course), true);
+}
+
+function startTimer() {
+  if (timer) return;
+  lastTick = performance.now();
+  timer = setInterval(tick, UPDATE_INTERVAL_MS);
+}
+
+async function togglePlayback() {
+  if (path.length < 2) return;
+  playing = !playing;
+  if (playing) {
+    await setSimulating(true);
+    lastTick = performance.now();
+  }
+  updatePlayButtons();
+  startTimer();
+  tick();
+}
+
+function stopPlayback() {
+  playing = false;
+  travelled = 0;
+  elements.progress.textContent = "";
+  updatePlayButtons();
+}
+
+function setTool(name) {
+  tool = name;
+  elements["tool-place"].classList.toggle("active", name === "place");
+  elements["tool-draw"].classList.toggle("active", name === "draw");
+  elements["tool-hint"].textContent = name === "place" ? "Click the map to set a fixed position." : "Click the map to add points to the path.";
+}
+
+map.on("click", async event => {
+  if (tool === "draw") {
+    path.push(event.latlng);
+    updatePathInfo();
+    return;
+  }
+  playing = false;
+  updatePlayButtons();
+  fixedPosition = event.latlng;
+  await setSimulating(true);
+  startTimer();
+  tick();
+});
+
+function importGpx(text) {
+  const documentNode = new DOMParser().parseFromString(text, "application/xml");
+  const points = [...documentNode.querySelectorAll("trkpt, rtept")];
+  const source = points.length ? points : [...documentNode.querySelectorAll("wpt")];
+  path = source.map(point => L.latLng(Number(point.getAttribute("lat")), Number(point.getAttribute("lon"))));
+  stopPlayback();
+  updatePathInfo();
+  if (path.length) map.fitBounds(pathLine.getBounds(), { padding: [40, 40] });
+}
+
+elements.connect.addEventListener("click", () => (port ? disconnect() : connect().catch(error => log(String(error), "!"))));
+elements.simulate.addEventListener("click", () => setSimulating(!simulating));
+elements["tool-place"].addEventListener("click", () => setTool("place"));
+elements["tool-draw"].addEventListener("click", () => setTool("draw"));
+elements.undo.addEventListener("click", () => { path.pop(); updatePathInfo(); });
+elements.clear.addEventListener("click", () => { path = []; stopPlayback(); updatePathInfo(); });
+elements["import-button"].addEventListener("click", () => elements.import.click());
+elements.import.addEventListener("change", async () => {
+  const file = elements.import.files[0];
+  if (file) importGpx(await file.text());
+  elements.import.value = "";
+});
+elements.play.addEventListener("click", togglePlayback);
+elements.stop.addEventListener("click", stopPlayback);
+document.querySelectorAll("[data-speed]").forEach(button => button.addEventListener("click", () => { elements.speed.value = button.dataset.speed; }));
+navigator.serial?.addEventListener("disconnect", event => { if (event.target === port) disconnect(); });
+
+try {
+  const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  path = saved.map(([latitude, longitude]) => L.latLng(latitude, longitude));
+  if (path.length) {
+    updatePathInfo();
+    map.fitBounds(pathLine.getBounds(), { padding: [40, 40] });
+  }
+} catch (error) {}
+</script>
+</body>
+</html>

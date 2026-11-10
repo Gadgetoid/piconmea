@@ -1,0 +1,44 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+env:
+  PICO_SDK_VERSION: 2.3.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        board:
+          - pico2_w
+          - pimoroni_pico_lipo2xl_w
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: raspberrypi/pico-sdk
+          ref: ${{ env.PICO_SDK_VERSION }}
+          path: pico-sdk
+          submodules: true
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi cmake ninja-build
+
+      - name: Build
+        env:
+          PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPICO_BOARD=${{ matrix.board }}
+          ninja -C build
+          cp build/piconmea.uf2 piconmea-${{ matrix.board }}.uf2
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: piconmea-${{ matrix.board }}
+          path: piconmea-${{ matrix.board }}.uf2
